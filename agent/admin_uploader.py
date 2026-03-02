@@ -141,10 +141,20 @@ async def get_max_scheduled_date(context: BrowserContext) -> date:
 async def _get_vertical_options(page: Page) -> dict[str, str]:
     """
     Read the vertical dropdown options from the create-puzzle form.
-    Returns a dict mapping slug/name (lowercased) -> option value (ID).
+    Waits for the dropdown to be populated (client-side rendering) before reading.
+    Returns a dict mapping display name (lowercased) -> option value (ID).
     """
+    # Wait for at least one non-placeholder <option> with a value to appear
+    dropdown = page.locator(SEL_VERTICAL_DROPDOWN)
+    try:
+        await dropdown.locator("option[value]:not([value=''])").first.wait_for(
+            state="attached", timeout=10000
+        )
+    except Exception:
+        logger.warning("Timed out waiting for vertical dropdown options to load.")
+
     options: dict[str, str] = {}
-    option_elements = await page.locator(f"{SEL_VERTICAL_DROPDOWN} option").all()
+    option_elements = await dropdown.locator("option").all()
     for opt in option_elements:
         value = await opt.get_attribute("value") or ""
         text = (await opt.inner_text()).strip()
