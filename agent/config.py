@@ -59,9 +59,8 @@ ANSWER_SEARCH_DEBOUNCE_MS = 500
 APPROVED_VERTICALS: list[str] = [
     "countries",
     "sports",
-    "movies",
-    "tv",
-    "companies",
+    "movies_tv",
+    "fortune_500",
     "languages",
 ]
 

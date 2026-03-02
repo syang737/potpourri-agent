@@ -46,15 +46,13 @@ _VERTICAL_KEYWORDS: dict[str, list[str]] = {
         "sport", "athlete", "olympic", "nba", "nfl", "fifa", "football",
         "basketball", "baseball", "soccer", "tennis", "medal",
     ],
-    "movies": [
+    "movies_tv": [
         "movie", "film", "box office", "gross", "oscar", "academy award",
         "director", "actor", "actress", "cinema",
-    ],
-    "tv": [
         "television", "tv show", "tv series", "emmy", "sitcom",
         "streaming", "netflix", "rated tv",
     ],
-    "companies": [
+    "fortune_500": [
         "compan", "corporation", "fortune", "revenue", "market cap",
         "brand", "employer", "startup", "business",
     ],
