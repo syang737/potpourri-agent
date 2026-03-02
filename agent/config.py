@@ -6,6 +6,12 @@ if the admin UI changes.
 """
 
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load .env from the repo root (one level above this file)
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 # ---------------------------------------------------------------------------
 # Environment variables

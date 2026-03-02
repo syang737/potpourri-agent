@@ -13,6 +13,12 @@ playwright install chromium
 
 ### 2. Set environment variables
 
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and fill in your values:
+
 | Variable | Required | Description |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | Yes | Anthropic API key (from console.anthropic.com) |
@@ -20,12 +26,7 @@ playwright install chromium
 | `ADMIN_PASSWORD` | For upload | Admin login password |
 | `POTPOURRI_URL` | No | Base URL (default: `https://potpourri.lol`) |
 
-```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
-export ADMIN_EMAIL="you@example.com"
-export ADMIN_PASSWORD="your-password"
-export POTPOURRI_URL="https://potpourri.lol"
-```
+The agent loads `.env` automatically via python-dotenv. The `.env` file is gitignored so your secrets stay local.
 
 ### 3. (Optional) Initialize login session
 
@@ -129,6 +130,6 @@ All Playwright selectors for the admin UI are defined at the top of `agent/confi
 ## Guardrails
 
 - **Draft-only**: The agent only clicks "Create Puzzle" (which creates in SCHEDULED status). It never clicks Publish.
-- **Approved verticals only**: Only puzzles matching `countries`, `sports`, `movies`, `tv`, `companies`, `languages` are created.
+- **Approved verticals only**: Only puzzles matching `countries`, `sports`, `movies_tv`, `fortune_500`, `languages` are created.
 - **Rate limiting**: 2-second delay between Wikipedia requests.
-- **No secrets in repo**: Credentials come from environment variables only.
+- **No secrets in repo**: Credentials loaded from `.env` file (gitignored).
