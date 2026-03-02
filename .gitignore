@@ -4,6 +4,7 @@ __pycache__/
 .env
 storage_state.json
 output/
+cache/
 *.egg-info/
 dist/
 build/

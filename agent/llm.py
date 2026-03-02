@@ -1,12 +1,17 @@
 """
 LLM integration: use Claude to curate URLs and generate puzzle JSON
 from scraped Wikipedia data.
+
+Includes a file-based cache so repeated runs with the same inputs skip
+the API call entirely.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import os
 from datetime import date
 
 import anthropic
@@ -16,6 +21,44 @@ from agent.config import ANTHROPIC_API_KEY, APPROVED_VERTICALS, LLM_MODEL, REQUI
 logger = logging.getLogger(__name__)
 
 _client: anthropic.Anthropic | None = None
+
+# ---------------------------------------------------------------------------
+# File-based LLM response cache
+# ---------------------------------------------------------------------------
+_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "cache")
+
+
+def _cache_key(*parts: object) -> str:
+    """Return a SHA-256 hex digest of the JSON-serialised *parts*."""
+    raw = json.dumps(parts, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _read_cache(namespace: str, key: str) -> object | None:
+    path = os.path.join(_CACHE_DIR, namespace, f"{key}.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        logger.info("Cache hit [%s/%s]", namespace, key[:12])
+        return data
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _write_cache(namespace: str, key: str, value: object) -> None:
+    dirpath = os.path.join(_CACHE_DIR, namespace)
+    os.makedirs(dirpath, exist_ok=True)
+    path = os.path.join(dirpath, f"{key}.json")
+    with open(path, "w") as f:
+        json.dump(value, f, indent=2, default=str)
+    logger.info("Cached result [%s/%s]", namespace, key[:12])
+
+
+# ---------------------------------------------------------------------------
+# Claude API helpers
+# ---------------------------------------------------------------------------
 
 
 def _get_client() -> anthropic.Anthropic:
@@ -49,6 +92,17 @@ async def pick_best_urls(
     Each candidate dict has keys: url, title, vertical.
     Returns a filtered list with the same structure.
     """
+    truncated = candidates[:80]  # keep prompt size reasonable
+
+    # Check cache
+    key = _cache_key(
+        sorted([c["url"] for c in truncated]),
+        sorted(approved_verticals),
+    )
+    cached = _read_cache("pick_best_urls", key)
+    if cached is not None:
+        return cached
+
     system = (
         "You are a puzzle-content curator for a trivia game called Potpourri. "
         "Your job is to pick Wikipedia list pages that will produce fun, "
@@ -65,7 +119,6 @@ async def pick_best_urls(
         "- Lists about obscure topics most people wouldn't know\n"
     )
 
-    truncated = candidates[:80]  # keep prompt size reasonable
     user = (
         "Below are candidate Wikipedia list URLs. Pick 5-10 of the best ones "
         "for generating Potpourri puzzles. Return ONLY a JSON array of objects "
@@ -91,7 +144,9 @@ async def pick_best_urls(
             r for r in result
             if r.get("vertical", "").lower() in approved_verticals
         ]
-        return result[:10]
+        result = result[:10]
+        _write_cache("pick_best_urls", key, result)
+        return result
     except (json.JSONDecodeError, ValueError):
         logger.error("LLM returned invalid JSON for URL selection:\n%s", raw)
         return []
@@ -109,6 +164,8 @@ def generate_puzzle(
     internal representation.
 
     Returns None if the LLM output is invalid after one retry.
+    Results are cached by (source URL, table data, vertical) so that
+    re-runs with different scheduled dates don't re-call the API.
     """
     # Build a compact text representation of the scraped data
     if scraped_data.get("tables"):
@@ -125,6 +182,14 @@ def generate_puzzle(
 
     source_url = scraped_data.get("url", "")
     page_title = scraped_data.get("title", "")
+
+    # Check cache (keyed on content, NOT on scheduled_for)
+    key = _cache_key(source_url, vertical_slug, table_text)
+    cached = _read_cache("generate_puzzle", key)
+    if cached is not None:
+        # Patch the scheduled date to the requested value
+        cached["scheduledFor"] = scheduled_for.isoformat()
+        return cached
 
     system = (
         "You are a puzzle generator for a trivia game called Potpourri.\n"
@@ -207,6 +272,7 @@ def generate_puzzle(
         puzzle.setdefault("fuzzyNotes", "")
 
         logger.info("Generated puzzle: %s", puzzle.get("topic", "?"))
+        _write_cache("generate_puzzle", key, puzzle)
         return puzzle
 
     logger.error("Failed to generate valid puzzle for %s after retries.", source_url)

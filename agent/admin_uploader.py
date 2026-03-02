@@ -141,17 +141,17 @@ async def get_max_scheduled_date(context: BrowserContext) -> date:
 async def _get_vertical_options(page: Page) -> dict[str, str]:
     """
     Read the vertical dropdown options from the create-puzzle form.
-    Waits for the dropdown to be populated (client-side rendering) before reading.
+    Caller should have already waited for the /api/admin/verticals response.
     Returns a dict mapping display name (lowercased) -> option value (ID).
     """
-    # Wait for at least one non-placeholder <option> with a value to appear
     dropdown = page.locator(SEL_VERTICAL_DROPDOWN)
+    # Brief wait for React to finish rendering the options
     try:
         await dropdown.locator("option[value]:not([value=''])").first.wait_for(
-            state="attached", timeout=10000
+            state="attached", timeout=3000
         )
     except Exception:
-        logger.warning("Timed out waiting for vertical dropdown options to load.")
+        logger.warning("Dropdown options still empty after waiting for render.")
 
     options: dict[str, str] = {}
     option_elements = await dropdown.locator("option").all()
@@ -276,7 +276,46 @@ async def create_puzzle(
     logger.info("Creating puzzle: %s [%s] for %s", topic, vertical, scheduled_for)
 
     try:
-        await page.goto(ADMIN_PUZZLE_NEW_URL, wait_until="domcontentloaded", timeout=30000)
+        # Navigate and wait for the verticals API response so the dropdown
+        # is populated before we try to read it.
+        verticals_loaded = False
+        try:
+            async with page.expect_response(
+                lambda r: "/api/admin/verticals" in r.url, timeout=15000
+            ) as resp_info:
+                await page.goto(
+                    ADMIN_PUZZLE_NEW_URL,
+                    wait_until="domcontentloaded",
+                    timeout=30000,
+                )
+            resp = await resp_info.value
+            if not resp.ok:
+                logger.error(
+                    "Verticals API returned HTTP %d – check server logs",
+                    resp.status,
+                )
+            else:
+                body = await resp.json()
+                count = len(body.get("verticals", []))
+                if count == 0:
+                    logger.error(
+                        "Verticals API returned 0 verticals – "
+                        "run 'npx prisma db seed' in the Potpourri app"
+                    )
+                else:
+                    logger.info("Verticals API: %d verticals loaded", count)
+                    verticals_loaded = True
+        except Exception:
+            logger.warning(
+                "Did not receive /api/admin/verticals response within timeout. "
+                "The page may not have loaded correctly."
+            )
+
+        if not verticals_loaded:
+            return False
+
+        # Small wait for React to re-render with the fetched data
+        await page.wait_for_timeout(500)
 
         # 1. Select vertical
         if not await _select_vertical(page, vertical):
