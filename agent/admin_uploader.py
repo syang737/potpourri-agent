@@ -23,6 +23,7 @@ from agent.config import (
     ADMIN_PUZZLE_NEW_URL,
     ADMIN_PUZZLES_URL,
     ANSWER_SEARCH_DEBOUNCE_MS,
+    POTPOURRI_URL,
     REQUIRED_ANSWERS,
     SEL_ANSWER_SEARCH_INPUT,
     SEL_ANSWER_SEARCH_RESULT_ITEM,
@@ -50,34 +51,39 @@ async def _get_context(browser: Browser) -> BrowserContext:
     return await browser.new_context()
 
 
-async def login(browser: Browser) -> BrowserContext:
+async def _verify_auth(context: BrowserContext) -> bool:
     """
-    Log in to the admin UI and persist browser state.
+    Verify that the current browser context has a valid admin session
+    by hitting the /api/admin/check endpoint.
 
-    Returns a BrowserContext that is authenticated.
+    Admin pages are client-rendered and load without auth, so checking
+    if a page renders is NOT reliable.  This endpoint checks the actual
+    server-side session.
     """
-    context = await _get_context(browser)
     page = await context.new_page()
-
     try:
-        await page.goto(ADMIN_LOGIN_URL, wait_until="domcontentloaded", timeout=30000)
+        resp = await page.goto(
+            f"{POTPOURRI_URL}/api/admin/check",
+            wait_until="domcontentloaded",
+            timeout=10000,
+        )
+        if resp and resp.ok:
+            logger.info("Stored auth state is valid.")
+            return True
+        logger.info("Stored auth state is stale (HTTP %s).", resp.status if resp else "?")
+    except Exception:
+        logger.info("Could not verify stored auth state.")
+    finally:
+        await page.close()
+    return False
 
-        # Check if already logged in (redirected to dashboard or puzzles)
-        if "/admin/puzzles" in page.url or page.url.rstrip("/").endswith("/admin"):
-            # Try navigating to puzzles to verify auth
-            await page.goto(ADMIN_PUZZLES_URL, wait_until="domcontentloaded", timeout=15000)
-            # If we see the puzzles page, we're logged in
-            try:
-                await page.wait_for_selector(
-                    'text="Manage Puzzles"', timeout=5000
-                )
-                logger.info("Already logged in via stored state.")
-                await page.close()
-                return context
-            except Exception:
-                pass  # Not logged in, continue with login
 
-        # Perform login
+async def _do_login(context: BrowserContext) -> None:
+    """
+    Perform a fresh email/password login and save state for future runs.
+    """
+    page = await context.new_page()
+    try:
         logger.info("Logging in as %s", ADMIN_EMAIL)
         await page.goto(ADMIN_LOGIN_URL, wait_until="domcontentloaded", timeout=30000)
 
@@ -92,10 +98,37 @@ async def login(browser: Browser) -> BrowserContext:
         # Save state for future runs
         await context.storage_state(path=STORAGE_STATE_PATH)
         logger.info("Saved auth state to %s", STORAGE_STATE_PATH)
-
     finally:
         await page.close()
 
+
+async def login(browser: Browser) -> BrowserContext:
+    """
+    Log in to the admin UI and persist browser state.
+
+    If a stored session exists we verify it against the server-side API
+    (not just by loading a page, which always works because admin pages
+    are client-rendered).  If the session is stale we discard it and
+    perform a fresh login.
+
+    Returns a BrowserContext that is authenticated.
+    """
+    # Try reusing stored state
+    if os.path.exists(STORAGE_STATE_PATH):
+        context = await browser.new_context(storage_state=STORAGE_STATE_PATH)
+        if await _verify_auth(context):
+            return context
+        # Stale – discard and start fresh
+        logger.info("Discarding stale stored auth state.")
+        await context.close()
+        try:
+            os.remove(STORAGE_STATE_PATH)
+        except OSError:
+            pass
+
+    # Fresh login
+    context = await browser.new_context()
+    await _do_login(context)
     return context
 
 
