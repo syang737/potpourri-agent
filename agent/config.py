@@ -60,15 +60,16 @@ SEL_PUZZLE_STATUS_BADGE = 'span'  # look for text content DRAFT/SCHEDULED/etc.
 ANSWER_SEARCH_DEBOUNCE_MS = 500
 
 # ---------------------------------------------------------------------------
-# Approved verticals
+# Approved verticals – slug → display name (must match the admin UI dropdown)
 # ---------------------------------------------------------------------------
-APPROVED_VERTICALS: list[str] = [
-    "countries",
-    "sports",
-    "movies_tv",
-    "fortune_500",
-    "languages",
-]
+VERTICAL_DISPLAY_NAMES: dict[str, str] = {
+    "countries": "Countries",
+    "sports": "Sports",
+    "movies_tv": "Movies / TV Shows",
+    "fortune_500": "Fortune 500",
+    "languages": "Languages",
+}
+APPROVED_VERTICALS: list[str] = list(VERTICAL_DISPLAY_NAMES.keys())
 
 # ---------------------------------------------------------------------------
 # Wikipedia seed pages for discovery

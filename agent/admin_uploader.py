@@ -34,6 +34,7 @@ from agent.config import (
     SEL_TOPIC_INPUT,
     SEL_VERTICAL_DROPDOWN,
     STORAGE_STATE_PATH,
+    VERTICAL_DISPLAY_NAMES,
 )
 
 logger = logging.getLogger(__name__)
@@ -152,38 +153,34 @@ async def _get_vertical_options(page: Page) -> dict[str, str]:
     return options
 
 
-def _normalize(s: str) -> str:
-    """Strip non-alphanumeric characters and lowercase for fuzzy matching."""
-    return re.sub(r"[^a-z0-9]", "", s.lower())
-
-
 async def _select_vertical(page: Page, vertical_slug: str) -> bool:
     """
     Select the correct vertical from the dropdown.
 
-    The dropdown displays the vertical *name* (e.g. "Movies / TV Shows")
-    while the agent passes a *slug* (e.g. "movies_tv").  We normalise both
-    sides by stripping non-alphanumeric characters so that "movies_tv" matches
-    "Movies / TV Shows" and "fortune_500" matches "Fortune 500".
+    The dropdown displays the vertical *display name* (e.g. "Movies / TV Shows")
+    while the agent passes a *slug* (e.g. "movies_tv").  We look up the expected
+    display name from VERTICAL_DISPLAY_NAMES and match it against the dropdown.
 
     Returns True if successful.
     """
-    vertical_options = await _get_vertical_options(page)
+    display_name = VERTICAL_DISPLAY_NAMES.get(vertical_slug)
+    if not display_name:
+        logger.error(
+            "Vertical slug '%s' not in VERTICAL_DISPLAY_NAMES. Known slugs: %s",
+            vertical_slug,
+            list(VERTICAL_DISPLAY_NAMES.keys()),
+        )
+        return False
 
-    norm_slug = _normalize(vertical_slug)
-    target_value = None
-    for label, value in vertical_options.items():
-        norm_label = _normalize(label)
-        if norm_slug == norm_label or norm_slug in norm_label or norm_label in norm_slug:
-            target_value = value
-            break
+    vertical_options = await _get_vertical_options(page)
+    target_value = vertical_options.get(display_name.lower())
 
     if not target_value:
         logger.error(
-            "Vertical '%s' (normalized: '%s') not found in dropdown. Available: %s",
+            "Vertical '%s' (display name '%s') not found in dropdown. Available: %s",
             vertical_slug,
-            norm_slug,
-            {k: _normalize(k) for k in vertical_options},
+            display_name,
+            list(vertical_options.keys()),
         )
         return False
 
