@@ -152,25 +152,38 @@ async def _get_vertical_options(page: Page) -> dict[str, str]:
     return options
 
 
+def _normalize(s: str) -> str:
+    """Strip non-alphanumeric characters and lowercase for fuzzy matching."""
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
 async def _select_vertical(page: Page, vertical_slug: str) -> bool:
     """
     Select the correct vertical from the dropdown.
+
+    The dropdown displays the vertical *name* (e.g. "Movies / TV Shows")
+    while the agent passes a *slug* (e.g. "movies_tv").  We normalise both
+    sides by stripping non-alphanumeric characters so that "movies_tv" matches
+    "Movies / TV Shows" and "fortune_500" matches "Fortune 500".
+
     Returns True if successful.
     """
     vertical_options = await _get_vertical_options(page)
 
-    # Try exact match on slug, then partial match
+    norm_slug = _normalize(vertical_slug)
     target_value = None
     for label, value in vertical_options.items():
-        if vertical_slug.lower() in label or label in vertical_slug.lower():
+        norm_label = _normalize(label)
+        if norm_slug == norm_label or norm_slug in norm_label or norm_label in norm_slug:
             target_value = value
             break
 
     if not target_value:
         logger.error(
-            "Vertical '%s' not found in dropdown. Available: %s",
+            "Vertical '%s' (normalized: '%s') not found in dropdown. Available: %s",
             vertical_slug,
-            list(vertical_options.keys()),
+            norm_slug,
+            {k: _normalize(k) for k in vertical_options},
         )
         return False
 
