@@ -89,13 +89,28 @@ async def _do_login(context: BrowserContext) -> None:
 
         await page.locator(SEL_LOGIN_EMAIL).fill(ADMIN_EMAIL)
         await page.locator(SEL_LOGIN_PASSWORD).fill(ADMIN_PASSWORD)
-        await page.locator(SEL_LOGIN_SUBMIT).click()
 
-        # Wait for navigation after login
-        await page.wait_for_url("**/admin/**", timeout=15000)
-        logger.info("Login successful. Current URL: %s", page.url)
+        # Wait for the login API response (not URL change — the admin page
+        # stays at /admin and just re-renders via React state, so
+        # wait_for_url resolves immediately and we'd save state before the
+        # Set-Cookie header arrives).
+        async with page.expect_response(
+            lambda r: "/api/admin/login" in r.url, timeout=15000
+        ) as resp_info:
+            await page.locator(SEL_LOGIN_SUBMIT).click()
 
-        # Save state for future runs
+        resp = await resp_info.value
+        if not resp.ok:
+            try:
+                body = await resp.json()
+                detail = body.get("error", resp.status)
+            except Exception:
+                detail = resp.status
+            raise RuntimeError(f"Login failed (HTTP {resp.status}): {detail}")
+
+        logger.info("Login successful.")
+
+        # Save state for future runs (cookie is now set)
         await context.storage_state(path=STORAGE_STATE_PATH)
         logger.info("Saved auth state to %s", STORAGE_STATE_PATH)
     finally:
