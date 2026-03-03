@@ -39,13 +39,10 @@ _LIST_PATTERNS = re.compile(
 
 # Vertical keyword hints
 _VERTICAL_KEYWORDS: dict[str, list[str]] = {
-    "countries": [
+    "countries_full": [
         "countr", "nation", "sovereign", "land area", "population",
-        "gdp", "continent", "capital",
-    ],
-    "sports": [
-        "sport", "athlete", "olympic", "nba", "nfl", "fifa", "football",
-        "basketball", "baseball", "soccer", "tennis", "medal",
+        "gdp", "continent", "capital", "export", "import", "debt",
+        "military", "nuclear", "refugee", "tourism", "emission",
     ],
     "movies_tv": [
         "movie", "film", "box office", "gross", "oscar", "academy award",
@@ -57,9 +54,9 @@ _VERTICAL_KEYWORDS: dict[str, list[str]] = {
         "compan", "corporation", "fortune", "revenue", "market cap",
         "brand", "employer", "startup", "business",
     ],
-    "languages": [
-        "language", "spoken", "native speaker", "lingua", "dialect",
-        "writing system",
+    "us_states": [
+        "u.s. state", "us state", "american state", "state by",
+        "states by", "states of the united", "united states by",
     ],
 }
 
@@ -103,10 +100,16 @@ async def _extract_candidate_links(page: Page) -> list[CandidateLink]:
     return links
 
 
-async def discover_candidate_urls(browser: Browser) -> list[dict]:
+async def discover_candidate_urls(
+    browser: Browser,
+    past_topics: list[str] | None = None,
+) -> list[dict]:
     """
     Visit Wikipedia seed pages and return a list of promising URLs
     chosen by the LLM.
+
+    *past_topics* is forwarded to the LLM so it avoids selecting URLs
+    that would produce duplicate puzzle themes.
 
     Returns a list of dicts: [{"url": ..., "title": ..., "vertical": ...}, ...]
     """
@@ -171,6 +174,6 @@ async def discover_candidate_urls(browser: Browser) -> list[dict]:
         {"url": c.url, "title": c.title, "vertical": _infer_vertical(c.title) or ""}
         for c in unique
     ]
-    best = await pick_best_urls(candidate_dicts, APPROVED_VERTICALS)
+    best = await pick_best_urls(candidate_dicts, APPROVED_VERTICALS, past_topics)
     logger.info("LLM selected %d URLs for scraping.", len(best))
     return best

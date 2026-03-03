@@ -63,11 +63,10 @@ ANSWER_SEARCH_DEBOUNCE_MS = 500
 # Approved verticals – slug → display name (must match the admin UI dropdown)
 # ---------------------------------------------------------------------------
 VERTICAL_DISPLAY_NAMES: dict[str, str] = {
-    "countries": "Countries",
-    "sports": "Sports",
-    "movies_tv": "Movies / TV Shows",
+    "countries_full": "Countries (Full)",
     "fortune_500": "Fortune 500",
-    "languages": "Languages",
+    "movies_tv": "Movies / TV Shows",
+    "us_states": "US States",
 }
 APPROVED_VERTICALS: list[str] = list(VERTICAL_DISPLAY_NAMES.keys())
 

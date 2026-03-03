@@ -39,11 +39,34 @@ from agent.scraper import scrape_all
 from agent.llm import generate_puzzle
 from agent.admin_uploader import get_max_scheduled_date, login, upload_all
 
+import glob as globmod
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def _collect_past_topics() -> list[str]:
+    """
+    Read all previously generated puzzle files from the output directory
+    and return a list of topic strings (e.g. "Top 10 Countries by GDP").
+    This is fed to the LLM so it avoids repeating the same themes.
+    """
+    topics: list[str] = []
+    pattern = os.path.join(OUTPUT_DIR, "puzzles_*.json")
+    for path in globmod.glob(pattern):
+        try:
+            with open(path) as f:
+                puzzles = json.load(f)
+            for p in puzzles:
+                topic = p.get("topic", "")
+                if topic:
+                    topics.append(topic)
+        except (json.JSONDecodeError, OSError):
+            continue
+    return topics
 
 
 def _validate_env() -> list[str]:
@@ -66,10 +89,13 @@ def _validate_env_for_upload() -> list[str]:
 
 async def run_discovery(headless: bool = True) -> list[dict]:
     """Phase 1: discover candidate URLs from Wikipedia."""
+    past_topics = _collect_past_topics()
+    if past_topics:
+        logger.info("Loaded %d past puzzle topics for dedup.", len(past_topics))
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=headless)
         try:
-            urls = await discover_candidate_urls(browser)
+            urls = await discover_candidate_urls(browser, past_topics)
         finally:
             await browser.close()
     return urls
@@ -77,12 +103,16 @@ async def run_discovery(headless: bool = True) -> list[dict]:
 
 async def run_generate(headless: bool = True) -> list[dict]:
     """Phases 1-3: discover, scrape, and generate puzzles."""
+    past_topics = _collect_past_topics()
+    if past_topics:
+        logger.info("Loaded %d past puzzle topics for dedup.", len(past_topics))
+
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=headless)
         try:
             # Phase 1 – Discovery
             logger.info("=== Phase 1: Discovery ===")
-            candidate_urls = await discover_candidate_urls(browser)
+            candidate_urls = await discover_candidate_urls(browser, past_topics)
             if not candidate_urls:
                 logger.warning("No candidate URLs found. Exiting.")
                 return []
@@ -103,7 +133,7 @@ async def run_generate(headless: bool = True) -> list[dict]:
             # Phase 3 – Generation
             logger.info("=== Phase 3: Puzzle Generation ===")
             puzzles: list[dict] = []
-            for i, scraped in enumerate(scraped_pages):
+            for scraped in scraped_pages:
                 if len(puzzles) >= PUZZLES_PER_RUN:
                     break
                 vertical = scraped.get("vertical_hint", "")
@@ -111,7 +141,8 @@ async def run_generate(headless: bool = True) -> list[dict]:
                     logger.info("Skipping %s – no vertical hint.", scraped.get("url"))
                     continue
                 scheduled_for = start_date + timedelta(days=len(puzzles))
-                puzzle = generate_puzzle(scraped, vertical, scheduled_for)
+                all_topics = past_topics + [p["topic"] for p in puzzles]
+                puzzle = generate_puzzle(scraped, vertical, scheduled_for, all_topics)
                 if puzzle:
                     puzzles.append(puzzle)
 
@@ -127,19 +158,6 @@ async def run_upload(puzzles: list[dict], headless: bool = True) -> list[dict]:
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=headless)
         try:
-            # Read max scheduled date from admin
-            context = await login(browser)
-            try:
-                max_date = await get_max_scheduled_date(context)
-            finally:
-                await context.close()
-
-            # Re-assign scheduled dates based on actual max
-            for i, puzzle in enumerate(puzzles):
-                puzzle["scheduledFor"] = (
-                    max_date + timedelta(days=i + 1)
-                ).isoformat()
-
             results = await upload_all(browser, puzzles)
         finally:
             await browser.close()
@@ -149,12 +167,16 @@ async def run_upload(puzzles: list[dict], headless: bool = True) -> list[dict]:
 
 async def run_full(headless: bool = True) -> None:
     """Run the full pipeline: discover → scrape → generate → upload."""
+    past_topics = _collect_past_topics()
+    if past_topics:
+        logger.info("Loaded %d past puzzle topics for dedup.", len(past_topics))
+
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=headless)
         try:
             # Phase 1 – Discovery
             logger.info("=== Phase 1: Discovery ===")
-            candidate_urls = await discover_candidate_urls(browser)
+            candidate_urls = await discover_candidate_urls(browser, past_topics)
             if not candidate_urls:
                 logger.warning("No candidate URLs found. Exiting.")
                 return
@@ -171,14 +193,6 @@ async def run_full(headless: bool = True) -> None:
             # Phase 3 – Generation
             logger.info("=== Phase 3: Puzzle Generation ===")
 
-            # Read max scheduled date from admin
-            from agent.admin_uploader import login as admin_login
-            context = await admin_login(browser)
-            try:
-                max_date = await get_max_scheduled_date(context)
-            finally:
-                await context.close()
-
             puzzles: list[dict] = []
             for scraped in scraped_pages:
                 if len(puzzles) >= PUZZLES_PER_RUN:
@@ -187,8 +201,10 @@ async def run_full(headless: bool = True) -> None:
                 if not vertical:
                     logger.info("Skipping %s – no vertical hint.", scraped.get("url"))
                     continue
-                scheduled_for = max_date + timedelta(days=len(puzzles) + 1)
-                puzzle = generate_puzzle(scraped, vertical, scheduled_for)
+                # Use a placeholder date; real dates assigned at upload time
+                scheduled_for = date.today() + timedelta(days=len(puzzles) + 1)
+                all_topics = past_topics + [p["topic"] for p in puzzles]
+                puzzle = generate_puzzle(scraped, vertical, scheduled_for, all_topics)
                 if puzzle:
                     puzzles.append(puzzle)
 
@@ -207,16 +223,28 @@ async def run_full(headless: bool = True) -> None:
             logger.info("Saved puzzles to %s", output_path)
 
             # Phase 4 – Upload
+            # Dates are assigned here so that only successfully uploaded
+            # puzzles consume a date slot (no gaps from upload failures).
             logger.info("=== Phase 4: Upload ===")
-            results = await upload_all(browser, puzzles)
-            for r in results:
-                status = "OK" if r["success"] else "FAILED"
-                logger.info(
-                    "  [%s] %s (scheduled: %s)",
-                    status,
-                    r["topic"],
-                    r["scheduledFor"],
-                )
+            from agent.admin_uploader import login as admin_login, create_puzzle
+            context = await admin_login(browser)
+            try:
+                max_date = await get_max_scheduled_date(context)
+                next_date = max_date + timedelta(days=1)
+                for puzzle in puzzles:
+                    puzzle["scheduledFor"] = next_date.isoformat()
+                    success = await create_puzzle(context, puzzle)
+                    status = "OK" if success else "FAILED"
+                    logger.info(
+                        "  [%s] %s (scheduled: %s)",
+                        status,
+                        puzzle.get("topic", "?"),
+                        puzzle["scheduledFor"],
+                    )
+                    if success:
+                        next_date += timedelta(days=1)
+            finally:
+                await context.close()
 
         finally:
             await browser.close()

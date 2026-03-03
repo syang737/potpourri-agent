@@ -48,25 +48,39 @@ def _call_llm(system: str, user: str, max_tokens: int = 4096) -> str:
 # ---- URL selection --------------------------------------------------------
 
 async def pick_best_urls(
-    candidates: list[dict], approved_verticals: list[str]
+    candidates: list[dict],
+    approved_verticals: list[str],
+    past_topics: list[str] | None = None,
 ) -> list[dict]:
     """
     Ask Claude to choose 5-10 of the best candidate URLs for puzzle
-    generation.
+    generation, avoiding themes already covered by *past_topics*.
 
     Each candidate dict has keys: url, title, vertical.
     Returns a filtered list with the same structure.
     """
     truncated = candidates[:80]  # keep prompt size reasonable
 
-    # Check cache
+    # Cache key includes past_topics so a new run with different history
+    # doesn't reuse stale selections.
     key = cache_key(
         sorted([c["url"] for c in truncated]),
         sorted(approved_verticals),
+        sorted(past_topics or []),
     )
     cached = read_cache("pick_best_urls", key)
     if cached is not None:
         return cached
+
+    avoid_section = ""
+    if past_topics:
+        avoid_section = (
+            "\n\nIMPORTANT – The following puzzle topics have ALREADY been "
+            "created. Pick URLs that lead to DIFFERENT themes, angles, or "
+            "metrics. Be creative and explore less obvious rankings:\n"
+            + "\n".join(f"- {t}" for t in past_topics)
+            + "\n"
+        )
 
     system = (
         "You are a puzzle-content curator for a trivia game called Potpourri. "
@@ -82,6 +96,7 @@ async def pick_best_urls(
         "- Subjective rankings (opinion-based 'best of')\n"
         "- Lists with fewer than 10 items\n"
         "- Lists about obscure topics most people wouldn't know\n"
+        + avoid_section
     )
 
     user = (
@@ -123,10 +138,15 @@ def generate_puzzle(
     scraped_data: dict,
     vertical_slug: str,
     scheduled_for: date,
+    past_topics: list[str] | None = None,
 ) -> dict | None:
     """
     Given scraped Wikipedia data, produce a puzzle dict in the agent's
     internal representation.
+
+    *past_topics* is a list of previously generated topic strings so the
+    LLM can choose a fresh angle if the same source data could yield
+    multiple puzzles.
 
     Returns None if the LLM output is invalid after one retry.
     Results are cached by (source URL, table data, vertical) so that
@@ -156,6 +176,15 @@ def generate_puzzle(
         cached["scheduledFor"] = scheduled_for.isoformat()
         return cached
 
+    avoid_section = ""
+    if past_topics:
+        avoid_section = (
+            "\nIMPORTANT – These puzzle topics already exist. Choose a "
+            "DIFFERENT angle, metric, or framing for your puzzle:\n"
+            + "\n".join(f"- {t}" for t in past_topics)
+            + "\n"
+        )
+
     system = (
         "You are a puzzle generator for a trivia game called Potpourri.\n"
         "Given Wikipedia data, produce a top-10 ranking puzzle.\n\n"
@@ -167,8 +196,11 @@ def generate_puzzle(
         "- Apply fuzzy mapping where needed (e.g., USSR → Russia for modern "
         "continuity). Document any such mapping in fuzzyNotes.\n"
         "- The topic string should be concise and start with 'Top 10 ...'.\n"
-        "- No duplicate labels.\n\n"
-        "Return ONLY valid JSON (no markdown fences) with this exact schema:\n"
+        "- No duplicate labels.\n"
+        "- Think outside the box! Use creative, surprising, or less obvious "
+        "metrics when the data supports it.\n\n"
+        + avoid_section
+        + "Return ONLY valid JSON (no markdown fences) with this exact schema:\n"
         "{\n"
         '  "sourceUrl": "...",\n'
         '  "verticalSlug": "...",\n'
