@@ -8,53 +8,18 @@ the API call entirely.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
-import os
 from datetime import date
 
 import anthropic
 
+from agent.cache import cache_key, read_cache, write_cache
 from agent.config import ANTHROPIC_API_KEY, APPROVED_VERTICALS, LLM_MODEL, REQUIRED_ANSWERS
 
 logger = logging.getLogger(__name__)
 
 _client: anthropic.Anthropic | None = None
-
-# ---------------------------------------------------------------------------
-# File-based LLM response cache
-# ---------------------------------------------------------------------------
-_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "cache")
-
-
-def _cache_key(*parts: object) -> str:
-    """Return a SHA-256 hex digest of the JSON-serialised *parts*."""
-    raw = json.dumps(parts, sort_keys=True, default=str)
-    return hashlib.sha256(raw.encode()).hexdigest()
-
-
-def _read_cache(namespace: str, key: str) -> object | None:
-    path = os.path.join(_CACHE_DIR, namespace, f"{key}.json")
-    if not os.path.exists(path):
-        return None
-    try:
-        with open(path) as f:
-            data = json.load(f)
-        logger.info("Cache hit [%s/%s]", namespace, key[:12])
-        return data
-    except (json.JSONDecodeError, OSError):
-        return None
-
-
-def _write_cache(namespace: str, key: str, value: object) -> None:
-    dirpath = os.path.join(_CACHE_DIR, namespace)
-    os.makedirs(dirpath, exist_ok=True)
-    path = os.path.join(dirpath, f"{key}.json")
-    with open(path, "w") as f:
-        json.dump(value, f, indent=2, default=str)
-    logger.info("Cached result [%s/%s]", namespace, key[:12])
-
 
 # ---------------------------------------------------------------------------
 # Claude API helpers
@@ -95,11 +60,11 @@ async def pick_best_urls(
     truncated = candidates[:80]  # keep prompt size reasonable
 
     # Check cache
-    key = _cache_key(
+    key = cache_key(
         sorted([c["url"] for c in truncated]),
         sorted(approved_verticals),
     )
-    cached = _read_cache("pick_best_urls", key)
+    cached = read_cache("pick_best_urls", key)
     if cached is not None:
         return cached
 
@@ -145,7 +110,7 @@ async def pick_best_urls(
             if r.get("vertical", "").lower() in approved_verticals
         ]
         result = result[:10]
-        _write_cache("pick_best_urls", key, result)
+        write_cache("pick_best_urls", key, result)
         return result
     except (json.JSONDecodeError, ValueError):
         logger.error("LLM returned invalid JSON for URL selection:\n%s", raw)
@@ -184,8 +149,8 @@ def generate_puzzle(
     page_title = scraped_data.get("title", "")
 
     # Check cache (keyed on content, NOT on scheduled_for)
-    key = _cache_key(source_url, vertical_slug, table_text)
-    cached = _read_cache("generate_puzzle", key)
+    key = cache_key(source_url, vertical_slug, table_text)
+    cached = read_cache("generate_puzzle", key)
     if cached is not None:
         # Patch the scheduled date to the requested value
         cached["scheduledFor"] = scheduled_for.isoformat()
@@ -272,7 +237,7 @@ def generate_puzzle(
         puzzle.setdefault("fuzzyNotes", "")
 
         logger.info("Generated puzzle: %s", puzzle.get("topic", "?"))
-        _write_cache("generate_puzzle", key, puzzle)
+        write_cache("generate_puzzle", key, puzzle)
         return puzzle
 
     logger.error("Failed to generate valid puzzle for %s after retries.", source_url)

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from playwright.async_api import Browser, Page
 
+from agent.cache import cache_key, read_cache, write_cache
 from agent.config import (
     APPROVED_VERTICALS,
     WIKIPEDIA_REQUEST_DELAY_SEC,
@@ -110,23 +111,46 @@ async def discover_candidate_urls(browser: Browser) -> list[dict]:
     Returns a list of dicts: [{"url": ..., "title": ..., "vertical": ...}, ...]
     """
     all_candidates: list[CandidateLink] = []
-    page = await browser.new_page()
+    seeds_to_fetch: list[str] = []
 
-    try:
-        for seed_url in WIKIPEDIA_SEED_URLS:
-            logger.info("Loading seed page: %s", seed_url)
-            try:
-                await page.goto(seed_url, wait_until="domcontentloaded", timeout=30000)
-                candidates = await _extract_candidate_links(page)
-                logger.info(
-                    "Found %d candidate links on %s", len(candidates), seed_url
-                )
-                all_candidates.extend(candidates)
-            except Exception:
-                logger.exception("Failed to load seed page %s", seed_url)
-            await asyncio.sleep(WIKIPEDIA_REQUEST_DELAY_SEC)
-    finally:
-        await page.close()
+    # Check cache for each seed URL
+    for seed_url in WIKIPEDIA_SEED_URLS:
+        key = cache_key("seed", seed_url)
+        cached = read_cache("discovery", key)
+        if cached is not None:
+            all_candidates.extend(
+                CandidateLink(url=c["url"], title=c["title"]) for c in cached
+            )
+        else:
+            seeds_to_fetch.append(seed_url)
+
+    # Only open a browser if we have uncached seeds
+    if seeds_to_fetch:
+        page = await browser.new_page()
+        try:
+            for seed_url in seeds_to_fetch:
+                logger.info("Loading seed page: %s", seed_url)
+                try:
+                    await page.goto(seed_url, wait_until="domcontentloaded", timeout=30000)
+                    candidates = await _extract_candidate_links(page)
+                    logger.info(
+                        "Found %d candidate links on %s", len(candidates), seed_url
+                    )
+                    all_candidates.extend(candidates)
+                    # Cache the candidates for this seed
+                    key = cache_key("seed", seed_url)
+                    write_cache(
+                        "discovery",
+                        key,
+                        [{"url": c.url, "title": c.title} for c in candidates],
+                    )
+                except Exception:
+                    logger.exception("Failed to load seed page %s", seed_url)
+                await asyncio.sleep(WIKIPEDIA_REQUEST_DELAY_SEC)
+        finally:
+            await page.close()
+    else:
+        logger.info("All %d seed pages served from cache.", len(WIKIPEDIA_SEED_URLS))
 
     # Deduplicate by URL
     seen: set[str] = set()

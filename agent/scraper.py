@@ -12,6 +12,7 @@ import re
 from bs4 import BeautifulSoup, Tag
 from playwright.async_api import Browser
 
+from agent.cache import cache_key, read_cache, write_cache
 from agent.config import WIKIPEDIA_REQUEST_DELAY_SEC
 
 logger = logging.getLogger(__name__)
@@ -99,6 +100,8 @@ async def scrape_wikipedia_page(
     """
     Load *url* with Playwright and extract structured table data.
 
+    Results are cached by URL so repeated runs skip the network request.
+
     Returns:
         {
             "url": str,
@@ -107,6 +110,11 @@ async def scrape_wikipedia_page(
             "title": str,
         }
     """
+    key = cache_key("scrape", url)
+    cached = read_cache("scraper", key)
+    if cached is not None:
+        return cached
+
     page = await browser.new_page()
     result: dict = {"url": url, "tables": [], "ordered_lists": [], "title": ""}
     try:
@@ -117,6 +125,9 @@ async def scrape_wikipedia_page(
         best = _pick_best_table(tables)
         result["tables"] = best or (tables[0] if tables else [])
         result["ordered_lists"] = _extract_ordered_lists(html)
+        # Only cache successful scrapes that have data
+        if result["tables"] or result["ordered_lists"]:
+            write_cache("scraper", key, result)
     except Exception:
         logger.exception("Failed to scrape %s", url)
     finally:
