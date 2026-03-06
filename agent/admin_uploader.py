@@ -281,22 +281,30 @@ async def _add_answers(page: Page, answers: list[dict]) -> int:
             count = await results.count()
 
         if count > 0:
-            # Find the best match
-            best_match = None
-            label_lower = label.lower()
+            # Find the best match – prefer exact match over substring.
+            # Without this, searching "India" could match "British Indian
+            # Ocean Territory" because it appears first and contains "India"
+            # as a substring.
+            label_lower = label.lower().strip()
+            exact_match = None
+            substring_match = None
             for i in range(min(count, 20)):
                 item = results.nth(i)
                 text = (await item.inner_text()).strip().lower()
-                if label_lower in text or text in label_lower:
-                    best_match = item
+                if text == label_lower:
+                    exact_match = item
                     break
-            if best_match is None:
-                # Fall back to first result
-                best_match = results.first
+                if substring_match is None and (
+                    label_lower in text or text in label_lower
+                ):
+                    substring_match = item
+
+            best_match = exact_match or substring_match or results.first
+            selected_text = (await best_match.inner_text()).strip()
 
             await best_match.click()
             added += 1
-            logger.info("    Added: %s", label)
+            logger.info("    Added: %s (selected: '%s')", label, selected_text)
             # Small delay between answers
             await page.wait_for_timeout(200)
         else:
