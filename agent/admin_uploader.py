@@ -28,6 +28,7 @@ from agent.config import (
     SEL_ANSWER_SEARCH_INPUT,
     SEL_ANSWER_SEARCH_RESULT_ITEM,
     SEL_CREATE_PUZZLE_SUBMIT,
+    SEL_DESCRIPTION_TEXTAREA,
     SEL_LOGIN_EMAIL,
     SEL_LOGIN_PASSWORD,
     SEL_LOGIN_SUBMIT,
@@ -383,10 +384,15 @@ async def create_puzzle(
         # 2. Fill topic
         await page.locator(SEL_TOPIC_INPUT).fill(topic)
 
-        # 3. Fill scheduled-for date
+        # 3. Fill description / source URL
+        source_url = puzzle.get("sourceUrl", "")
+        if source_url:
+            await page.locator(SEL_DESCRIPTION_TEXTAREA).fill(source_url)
+
+        # 4. Fill scheduled-for date
         await page.locator(SEL_SCHEDULED_FOR_INPUT).fill(scheduled_for)
 
-        # 4. Add answers
+        # 5. Add answers
         added = await _add_answers(page, answers)
         if added < REQUIRED_ANSWERS:
             logger.warning(
@@ -398,7 +404,7 @@ async def create_puzzle(
                 topic,
             )
 
-        # 5. Click "Create Puzzle" button (NOT publish)
+        # 6. Click "Create Puzzle" button (NOT publish)
         submit = page.locator(SEL_CREATE_PUZZLE_SUBMIT)
         if added == REQUIRED_ANSWERS:
             await submit.click()
