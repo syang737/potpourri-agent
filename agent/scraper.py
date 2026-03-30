@@ -6,6 +6,7 @@ Playwright (page load) + BeautifulSoup (HTML parsing).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 
@@ -18,12 +19,19 @@ from agent.config import WIKIPEDIA_REQUEST_DELAY_SEC
 logger = logging.getLogger(__name__)
 
 
-def _extract_tables(html: str) -> list[list[dict[str, str]]]:
+def _extract_tables(html: str) -> list[dict]:
     """
-    Parse all wikitables from *html* and return each as a list of row dicts.
+    Parse all wikitables from *html* and return each as a dict with
+    ``heading`` (the nearest preceding section heading, if any) and
+    ``rows`` (list of row-dicts).
+
+    Including the section heading is critical for pages that group data
+    into multiple tables by bucket (e.g., ">100K tons", "1–100K tons").
+    Without the heading the LLM cannot tell which table contains the
+    top-ranked entries.
     """
     soup = BeautifulSoup(html, "html.parser")
-    tables: list[list[dict[str, str]]] = []
+    tables: list[dict] = []
 
     for table_tag in soup.select("table.wikitable, table.sortable"):
         rows: list[dict[str, str]] = []
@@ -49,8 +57,28 @@ def _extract_tables(html: str) -> list[list[dict[str, str]]]:
                 row[key] = cell.get_text(strip=True)
             rows.append(row)
 
-        if rows:
-            tables.append(rows)
+        if not rows:
+            continue
+
+        # Find the nearest preceding section heading (h2/h3/h4)
+        heading = ""
+        for prev in table_tag.previous_siblings:
+            if isinstance(prev, Tag) and prev.name in ("h2", "h3", "h4"):
+                heading = prev.get_text(strip=True).rstrip("[edit]")
+                break
+        # If no sibling heading found, walk up to parent and look there
+        if not heading:
+            parent = table_tag.parent
+            while parent:
+                for prev in parent.previous_siblings:
+                    if isinstance(prev, Tag) and prev.name in ("h2", "h3", "h4"):
+                        heading = prev.get_text(strip=True).rstrip("[edit]")
+                        break
+                if heading:
+                    break
+                parent = parent.parent
+
+        tables.append({"heading": heading, "rows": rows})
 
     return tables
 
@@ -73,25 +101,26 @@ def _extract_ordered_lists(html: str) -> list[list[str]]:
     return results
 
 
-def _pick_best_table(tables: list[list[dict[str, str]]]) -> list[dict[str, str]] | None:
+def _tables_to_text(tables: list[dict]) -> str:
     """
-    Heuristic: pick the table with the most rows that also has a column
-    looking like a name/entity column.
+    Convert all extracted tables into a text representation that
+    preserves section headings so the LLM can distinguish between
+    bucketed tables (e.g. ">100K tons" vs "1–100K tons").
     """
-    name_patterns = re.compile(
-        r"(name|country|nation|film|movie|show|company|language|team|"
-        r"player|athlete|title|brand|city|rank)",
-        re.IGNORECASE,
-    )
-    scored: list[tuple[int, list[dict[str, str]]]] = []
-    for table in tables:
-        if not table:
-            continue
-        name_cols = sum(1 for k in table[0] if name_patterns.search(k))
-        score = len(table) * 10 + name_cols * 100
-        scored.append((score, table))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return scored[0][1] if scored else None
+    if not tables:
+        return ""
+    parts: list[str] = []
+    for idx, tbl in enumerate(tables):
+        heading = tbl.get("heading", "")
+        rows = tbl.get("rows", [])
+        header = f"=== Table {idx + 1}"
+        if heading:
+            header += f": {heading}"
+        header += f" ({len(rows)} rows) ==="
+        parts.append(header)
+        # Include up to 30 rows per table to keep prompt reasonable
+        parts.append(json.dumps(rows[:30], indent=1))
+    return "\n\n".join(parts)
 
 
 async def scrape_wikipedia_page(
@@ -122,8 +151,8 @@ async def scrape_wikipedia_page(
         result["title"] = await page.title()
         html = await page.content()
         tables = _extract_tables(html)
-        best = _pick_best_table(tables)
-        result["tables"] = best or (tables[0] if tables else [])
+        result["tables"] = tables
+        result["tables_text"] = _tables_to_text(tables)
         result["ordered_lists"] = _extract_ordered_lists(html)
         # Only cache successful scrapes that have data
         if result["tables"] or result["ordered_lists"]:

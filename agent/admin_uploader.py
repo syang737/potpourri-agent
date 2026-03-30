@@ -387,7 +387,12 @@ async def create_puzzle(
         # 3. Fill description / source URL
         source_url = puzzle.get("sourceUrl", "")
         if source_url:
-            await page.locator(SEL_DESCRIPTION_TEXTAREA).fill(source_url)
+            desc_field = page.locator(SEL_DESCRIPTION_TEXTAREA)
+            await desc_field.wait_for(state="visible", timeout=3000)
+            await desc_field.fill(source_url)
+            logger.info("Filled source URL: %s", source_url)
+        else:
+            logger.warning("No sourceUrl in puzzle data; skipping description.")
 
         # 4. Fill scheduled-for date
         await page.locator(SEL_SCHEDULED_FOR_INPUT).fill(scheduled_for)

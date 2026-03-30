@@ -152,8 +152,13 @@ def generate_puzzle(
     Results are cached by (source URL, table data, vertical) so that
     re-runs with different scheduled dates don't re-call the API.
     """
-    # Build a compact text representation of the scraped data
-    if scraped_data.get("tables"):
+    # Build a compact text representation of the scraped data.
+    # Prefer the pre-formatted tables_text which includes section
+    # headings — critical for pages that split data into bucketed
+    # tables (e.g. ">100K tons", "1-100K tons").
+    if scraped_data.get("tables_text"):
+        table_text = scraped_data["tables_text"]
+    elif scraped_data.get("tables"):
         table_text = json.dumps(scraped_data["tables"][:50], indent=1)
     elif scraped_data.get("ordered_lists"):
         table_text = "\n".join(
@@ -197,6 +202,10 @@ def generate_puzzle(
         "continuity). Document any such mapping in fuzzyNotes.\n"
         "- The topic string should be concise and start with 'Top 10 ...'.\n"
         "- No duplicate labels.\n"
+        "- IMPORTANT: Some Wikipedia pages split data into multiple tables "
+        "grouped by bucket (e.g., '>100,000 tonnes', '10,000–100,000 tonnes'). "
+        "When this happens, the TOP entries are in the HIGHEST bucket — use "
+        "that table for ranking, not the table with the most rows.\n"
         "- Think outside the box! Use creative, surprising, or less obvious "
         "metrics when the data supports it.\n\n"
         + avoid_section
